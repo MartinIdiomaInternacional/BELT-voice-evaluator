@@ -3,30 +3,75 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>CEFR Speaking Evaluator</title>
+  <title>CEFR Speaking Evaluator v2</title>
   <style>
     body {
-      font-family: sans-serif;
-      text-align: center;
+      font-family: Arial, sans-serif;
+      background-color: #f6f9fc;
       padding: 2rem;
+      text-align: center;
+    }
+    h1 {
+      color: #1f3b73;
     }
     button {
       padding: 1rem 2rem;
       font-size: 1.2rem;
       margin: 1rem;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      background-color: #4c6ef5;
+      color: white;
     }
     #result {
       margin-top: 2rem;
-      padding: 1rem;
-      border: 1px solid #ccc;
+      padding: 2rem;
+      background-color: white;
+      border-radius: 10px;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+      text-align: left;
+      max-width: 700px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .badge {
+      font-size: 2rem;
+      font-weight: bold;
+      padding: 10px 20px;
       border-radius: 8px;
-      background-color: #f9f9f9;
+      color: white;
+      display: inline-block;
+      margin-bottom: 15px;
+    }
+    .progress-bar {
+      width: 100%;
+      background-color: #e0e0e0;
+      border-radius: 6px;
+      margin-bottom: 10px;
+    }
+    .progress-fill {
+      height: 20px;
+      border-radius: 6px;
+      text-align: center;
+      color: white;
+      font-size: 0.9rem;
+    }
+    .transcript-box {
+      background-color: #f1f3f5;
+      padding: 10px;
+      border-radius: 6px;
+      margin-top: 10px;
+      font-style: italic;
+    }
+    ul {
+      padding-left: 20px;
     }
   </style>
 </head>
 <body>
-  <h1>🎙️ CEFR Speaking Evaluator</h1>
-  <p>Click "Start Recording", speak for 10–20 seconds, then click "Stop & Upload".</p>
+  <h1>🎙️ CEFR Speaking Evaluator v2</h1>
+  <p>Click "Start Recording", speak for 15–30 seconds, then click "Stop & Upload".</p>
 
   <button id="startBtn">Start Recording</button>
   <button id="stopBtn" disabled>Stop & Upload</button>
@@ -40,6 +85,20 @@
     const startBtn = document.getElementById("startBtn");
     const stopBtn = document.getElementById("stopBtn");
     const resultDiv = document.getElementById("result");
+
+    const levelColors = {
+      "A1": "#d9534f",
+      "A2": "#f0ad4e",
+      "B1": "#ffd500",
+      "B2": "#5cb85c",
+      "C1": "#0275d8",
+      "C2": "#5bc0de"
+    };
+
+    function levelToPercent(level) {
+      const map = { "A1": 20, "A2": 40, "B1": 60, "B2": 80, "C1": 90, "C2": 100 };
+      return map[level] || 0;
+    }
 
     startBtn.onclick = async () => {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -65,14 +124,31 @@
             body: formData,
             mode: "cors"
           });
-
           const data = await response.json();
+          const analysis = typeof data.text_analysis === "string" ? JSON.parse(data.text_analysis) : data.text_analysis;
+
+          const overall = analysis.overall?.level || analysis.grammar.level || "B1";
+          const pron = data.pronunciation.level;
+          const gram = analysis.grammar.level;
+          const vocab = analysis.vocabulary.level;
 
           resultDiv.innerHTML = `
-            <h2>📊 CEFR Evaluation Results</h2>
-            <p><strong>Basic:</strong> ${data.basic.level} - ${data.basic.explanation}</p>
-            <p><strong>Wav2Vec2:</strong> ${data.wav2vec2.level} - ${data.wav2vec2.explanation}</p>
-            <p><strong>HuBERT:</strong> ${data.hubert.level} - ${data.hubert.explanation}</p>
+            <div class="badge" style="background-color:${levelColors[overall]}">
+              Overall Level: ${overall}
+            </div>
+            <h3>Scores</h3>
+            <div class="progress-bar"><div class="progress-fill" style="width:${levelToPercent(pron)}%;background:${levelColors[pron]}">${pron}</div></div>
+            <div class="progress-bar"><div class="progress-fill" style="width:${levelToPercent(gram)}%;background:${levelColors[gram]}">${gram}</div></div>
+            <div class="progress-bar"><div class="progress-fill" style="width:${levelToPercent(vocab)}%;background:${levelColors[vocab]}">${vocab}</div></div>
+            
+            <h3>Transcript</h3>
+            <div class="transcript-box">${data.transcript}</div>
+
+            <h3>Feedback</h3>
+            <p><strong>Grammar:</strong> ${analysis.grammar.explanation}</p>
+            <p><strong>Vocabulary:</strong> ${analysis.vocabulary.explanation}</p>
+            <h4>Recommendations:</h4>
+            <ul>${analysis.recommendations.map(r => `<li>${r}</li>`).join('')}</ul>
           `;
         } catch (error) {
           resultDiv.innerHTML = "❌ Error uploading or evaluating audio.";
@@ -94,4 +170,3 @@
   </script>
 </body>
 </html>
-
