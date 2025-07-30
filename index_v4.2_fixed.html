@@ -1,2 +1,154 @@
-<!-- CEFR Speaking Evaluator Frontend (Patched v4.2) -->
-<!-- Refer to index_v4.2_fixed.html content from previous response -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CEFR Speaking Evaluator v4.2 (Fixed)</title>
+  <style>
+    body { 
+      font-family: Arial, sans-serif; 
+      text-align: center; 
+      margin: 2rem; 
+      background-color: #f9f9f9;
+    }
+    button { 
+      padding: 1rem 2rem; 
+      font-size: 1rem; 
+      margin: 0.5rem; 
+      cursor: pointer; 
+    }
+    #result, #question-box { 
+      margin-top: 1.5rem; 
+      padding: 1rem; 
+      border: 1px solid #ccc; 
+      border-radius: 8px; 
+      background-color: #fff; 
+      max-width: 500px; 
+      margin-left: auto; 
+      margin-right: auto; 
+    }
+    audio { margin-top: 1rem; }
+    .error { color: red; font-weight: bold; }
+    .success { color: green; }
+  </style>
+</head>
+<body>
+  <h1>🎙️ CEFR Speaking Evaluator v4.2</h1>
+
+  <button id="startTestBtn">Start Test</button>
+  <button id="startRecordBtn" disabled>🎤 Start Recording</button>
+  <button id="stopRecordBtn" disabled>🛑 Stop & Upload</button>
+
+  <div id="question-box">
+    <h3>Question</h3>
+    <p id="questionText">Click "Start Test" to begin.</p>
+    <audio id="questionAudio" controls autoplay></audio>
+  </div>
+
+  <div id="result"></div>
+
+  <script>
+    const API_BASE = "https://beltspeakingaiv2.onrender.com";
+    let sessionId = null;
+    let mediaRecorder;
+    let audioChunks = [];
+    let questionCount = 0;
+
+    // Display question safely
+    function displayQuestion(text, audioUrl) {
+      document.getElementById("questionText").innerText = text || "⚠️ No question received. Please retry.";
+      const audio = document.getElementById("questionAudio");
+      audio.src = audioUrl ? API_BASE + audioUrl : "";
+      if (audioUrl) audio.play();
+    }
+
+    // Start the test
+    document.getElementById("startTestBtn").onclick = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/start_test`, { method: "POST" });
+        const data = await res.json();
+        sessionId = data.session_id;
+        questionCount = 1;
+        displayQuestion(data.question, data.audio_url);
+        document.getElementById("result").innerHTML = `<p class="success">✅ Session started. Answer question 1.</p>`;
+        document.getElementById("startRecordBtn").disabled = false;
+      } catch (err) {
+        document.getElementById("result").innerHTML = `<p class="error">❌ Failed to start test.</p>`;
+      }
+    };
+
+    // Start recording
+    document.getElementById("startRecordBtn").onclick = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream);
+        audioChunks = [];
+        mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+        mediaRecorder.start();
+        document.getElementById("result").innerHTML = "🎙️ Recording...";
+        document.getElementById("stopRecordBtn").disabled = false;
+        document.getElementById("startRecordBtn").disabled = true;
+      } catch (err) {
+        document.getElementById("result").innerHTML = `<p class="error">❌ Microphone access denied.</p>`;
+      }
+    };
+
+    // Stop and upload
+    document.getElementById("stopRecordBtn").onclick = async () => {
+      mediaRecorder.stop();
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+        const formData = new FormData();
+        formData.append("session_id", sessionId);
+        formData.append("file", audioBlob, "answer.wav");
+
+        document.getElementById("result").innerHTML = "⏳ Uploading and analyzing...";
+
+        try {
+          const res = await fetch(`${API_BASE}/next_question`, { method: "POST", body: formData });
+          const data = await res.json();
+
+          if (data.done) {
+            document.getElementById("result").innerHTML = "✅ Test complete. Fetching final result...";
+            getFinalResult();
+          } else {
+            questionCount++;
+            const nextQuestion = data.question || "⚠️ No question received. Please try again.";
+            displayQuestion(nextQuestion, data.audio_url);
+            document.getElementById("result").innerHTML = `<p class="success">✅ Answer received. Next question (#${questionCount}).</p>`;
+            document.getElementById("startRecordBtn").disabled = false;
+            document.getElementById("stopRecordBtn").disabled = true;
+          }
+        } catch (err) {
+          document.getElementById("result").innerHTML = `<p class="error">❌ Error uploading or analyzing audio.</p>`;
+        }
+      };
+    };
+
+    // Get final result
+    async function getFinalResult() {
+      const formData = new FormData();
+      formData.append("session_id", sessionId);
+
+      try {
+        const res = await fetch(`${API_BASE}/final_result`, { method: "POST", body: formData });
+        const data = await res.json();
+
+        let detailsHtml = "<h3>Detailed Feedback:</h3><ul>";
+        data.details.forEach((ans, idx) => {
+          detailsHtml += `<li><b>Answer ${idx+1}</b> - Pronunciation Level: ${ans.pronunciation}<br/>Text Eval: ${ans.text}</li>`;
+        });
+        detailsHtml += "</ul>";
+
+        document.getElementById("result").innerHTML = `
+          <h2>🏆 Final CEFR Level: ${data.overall_level}</h2>
+          ${detailsHtml}
+          <audio controls autoplay src="${API_BASE}${data.feedback_audio_url}"></audio>
+        `;
+      } catch (err) {
+        document.getElementById("result").innerHTML = `<p class="error">❌ Could not fetch final result.</p>`;
+      }
+    }
+  </script>
+</body>
+</html>
