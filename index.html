@@ -1,184 +1,130 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CEFR Speaking Evaluator – Adaptive Test</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CEFR Speaking Evaluator v4.1</title>
   <style>
     body {
       font-family: Arial, sans-serif;
-      background-color: #f6f9fc;
       text-align: center;
-      padding: 2rem;
-    }
-    h1 {
-      color: #1f3b73;
+      margin: 2rem;
+      background-color: #f9f9f9;
     }
     button {
       padding: 1rem 2rem;
-      font-size: 1.2rem;
-      margin: 1rem;
-      border-radius: 8px;
-      border: none;
+      font-size: 1rem;
+      margin: 0.5rem;
       cursor: pointer;
-      background-color: #4c6ef5;
-      color: white;
     }
-    #question-box {
-      background: white;
-      padding: 20px;
-      border-radius: 10px;
-      margin: 20px auto;
-      max-width: 600px;
-      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
-      font-size: 1.2rem;
-    }
-    #progress {
-      margin-top: 15px;
-      background: #ddd;
-      border-radius: 6px;
-      overflow: hidden;
-      width: 60%;
+    #result, #question-box {
+      margin-top: 1.5rem;
+      padding: 1rem;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      background-color: #fff;
+      max-width: 500px;
       margin-left: auto;
       margin-right: auto;
-      height: 20px;
     }
-    #progress-fill {
-      background: #4c6ef5;
-      height: 100%;
-      width: 0%;
-      transition: width 0.5s;
-      color: white;
-      text-align: center;
-      font-size: 0.9rem;
-    }
-    #result {
-      margin-top: 2rem;
-      padding: 2rem;
-      background-color: white;
-      border-radius: 10px;
-      max-width: 700px;
-      margin-left: auto;
-      margin-right: auto;
-      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+    audio {
+      margin-top: 1rem;
     }
   </style>
 </head>
 <body>
+  <h1>🎙️ CEFR Speaking Evaluator v4.1</h1>
 
-  <h1>🎙️ CEFR Speaking Evaluator v3</h1>
-  <p>Answer 5–6 questions progressively to estimate your CEFR speaking level.</p>
+  <button id="startTestBtn">Start Test</button>
+  <button id="startRecordBtn" disabled>🎤 Start Recording</button>
+  <button id="stopRecordBtn" disabled>🛑 Stop & Upload</button>
 
-  <div id="question-box">Click "Start Test" to begin.</div>
-
-  <button id="startBtn">Start Test</button>
-  <button id="recordBtn" disabled>🎤 Record & Send</button>
-
-  <div id="progress">
-    <div id="progress-fill">0%</div>
+  <div id="question-box">
+    <h3>Question will appear here</h3>
+    <p id="questionText"></p>
   </div>
 
   <div id="result"></div>
 
   <script>
+    const API_BASE = "https://beltspeakingaiv2.onrender.com";
     let sessionId = null;
-    let questionCount = 0;
     let mediaRecorder;
     let audioChunks = [];
-    const totalQuestions = 6;
+    let questionCount = 0;
 
-    const startBtn = document.getElementById("startBtn");
-    const recordBtn = document.getElementById("recordBtn");
-    const questionBox = document.getElementById("question-box");
-    const progressFill = document.getElementById("progress-fill");
-    const resultDiv = document.getElementById("result");
-
-    async function startTest() {
-      const res = await fetch("https://beltspeakingaiv2.onrender.com/start_test", { method: "POST" });
+    document.getElementById("startTestBtn").onclick = async () => {
+      const res = await fetch(`${API_BASE}/start_test`, { method: "POST" });
       const data = await res.json();
       sessionId = data.session_id;
-      questionBox.textContent = data.question;
-      questionCount = 0;
-      updateProgress();
-      startBtn.disabled = true;
-      recordBtn.disabled = false;
-      resultDiv.innerHTML = "";
-    }
+      questionCount = 1;
+      document.getElementById("questionText").innerText = data.question;
+      document.getElementById("result").innerHTML = `<p>✅ Session started. Answer question 1.</p>`;
+      document.getElementById("startRecordBtn").disabled = false;
+    };
 
-    async function sendAnswer(blob) {
-      const formData = new FormData();
-      formData.append("session_id", sessionId);
-      formData.append("file", blob, "answer.wav");
+    document.getElementById("startRecordBtn").onclick = async () => {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaRecorder = new MediaRecorder(stream);
+      audioChunks = [];
+      mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+      mediaRecorder.start();
+      document.getElementById("result").innerHTML = "🎙️ Recording...";
+      document.getElementById("stopRecordBtn").disabled = false;
+      document.getElementById("startRecordBtn").disabled = true;
+    };
 
-      const res = await fetch("https://beltspeakingaiv2.onrender.com/next_question", {
-        method: "POST",
-        body: formData
-      });
-      const data = await res.json();
+    document.getElementById("stopRecordBtn").onclick = async () => {
+      mediaRecorder.stop();
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+        const formData = new FormData();
+        formData.append("session_id", sessionId);
+        formData.append("file", audioBlob, "answer.wav");
 
-      questionCount++;
-      updateProgress();
+        document.getElementById("result").innerHTML = "⏳ Uploading and analyzing...";
 
-      if (data.done) {
-        getFinalResult();
-      } else {
-        questionBox.textContent = data.question;
-      }
-    }
+        const res = await fetch(`${API_BASE}/next_question`, {
+          method: "POST",
+          body: formData
+        });
+
+        const data = await res.json();
+
+        if (data.done) {
+          document.getElementById("result").innerHTML = "✅ Test complete. Fetching final result...";
+          getFinalResult();
+        } else {
+          questionCount++;
+          document.getElementById("questionText").innerText = data.question;
+          document.getElementById("result").innerHTML = `✅ Answer received. Next question (#${questionCount}).`;
+          document.getElementById("startRecordBtn").disabled = false;
+          document.getElementById("stopRecordBtn").disabled = true;
+        }
+      };
+    };
 
     async function getFinalResult() {
       const formData = new FormData();
       formData.append("session_id", sessionId);
 
-      const res = await fetch("https://beltspeakingaiv2.onrender.com/final_result", {
+      const res = await fetch(`${API_BASE}/final_result`, {
         method: "POST",
         body: formData
       });
       const data = await res.json();
 
-      let detailsHtml = "<h3>Detailed Analysis</h3><ul>";
-      data.details.forEach((ans, index) => {
-        detailsHtml += `<li><strong>Q${index+1}:</strong> Pronunciation level: ${ans.pronunciation}.<br>Text analysis: ${ans.text}</li>`;
+      let detailsHtml = "<h3>Detailed Feedback:</h3><ul>";
+      data.details.forEach((ans, idx) => {
+        detailsHtml += `<li><b>Answer ${idx+1}</b> - Pronunciation Level: ${ans.pronunciation}<br/>Text Eval: ${ans.text}</li>`;
       });
       detailsHtml += "</ul>";
 
-      resultDiv.innerHTML = `
-        <h2>🎉 Final CEFR Level: ${data.overall_level}</h2>
+      document.getElementById("result").innerHTML = `
+        <h2>🏆 Final CEFR Level: ${data.overall_level}</h2>
         ${detailsHtml}
       `;
-      questionBox.textContent = "Test complete!";
-      recordBtn.disabled = true;
-      startBtn.disabled = false;
     }
-
-    function updateProgress() {
-      const percent = Math.round((questionCount / totalQuestions) * 100);
-      progressFill.style.width = percent + "%";
-      progressFill.textContent = percent + "%";
-    }
-
-    startBtn.onclick = startTest;
-
-    recordBtn.onclick = async () => {
-      if (recordBtn.textContent.includes("Record")) {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        mediaRecorder = new MediaRecorder(stream);
-        audioChunks = [];
-
-        mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
-
-        mediaRecorder.onstop = () => {
-          const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
-          sendAnswer(audioBlob);
-        };
-
-        mediaRecorder.start();
-        recordBtn.textContent = "⏹ Stop & Send";
-      } else {
-        mediaRecorder.stop();
-        recordBtn.textContent = "🎤 Record & Send";
-      }
-    };
   </script>
 </body>
 </html>
