@@ -1,1 +1,177 @@
-<html><body><h1>CEFR Speaking Evaluator (With TTS)</h1></body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CEFR Speaking Evaluator (With TTS)</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      background: #f5f5f5;
+      padding: 30px;
+    }
+    h1 {
+      color: #2c3e50;
+    }
+    button {
+      padding: 12px 20px;
+      font-size: 16px;
+      margin: 10px;
+      cursor: pointer;
+      background-color: #007BFF;
+      color: white;
+      border: none;
+      border-radius: 5px;
+    }
+    button:disabled {
+      background-color: #ccc;
+      cursor: not-allowed;
+    }
+    .question-box {
+      margin-top: 20px;
+      padding: 15px;
+      background: white;
+      border-radius: 8px;
+      width: 80%;
+      margin-left: auto;
+      margin-right: auto;
+      box-shadow: 0 0 5px rgba(0, 0, 0, 0.1);
+      min-height: 50px;
+    }
+    #progressBar {
+      width: 80%;
+      background-color: #ddd;
+      margin: 20px auto;
+      height: 25px;
+      border-radius: 5px;
+    }
+    #progress {
+      height: 25px;
+      width: 0%;
+      background-color: #4CAF50;
+      text-align: center;
+      color: white;
+      border-radius: 5px;
+      line-height: 25px;
+    }
+    audio {
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+
+<h1>🎙️ CEFR Speaking Evaluator (With TTS)</h1>
+<p>Answer 5–6 questions progressively to estimate your CEFR speaking level.</p>
+
+<div id="progressBar"><div id="progress">0%</div></div>
+
+<div class="question-box" id="questionBox">Click "Start Test" to begin.</div>
+<audio id="questionAudio" controls style="display:none;"></audio>
+
+<br>
+<button id="startTestBtn">Start Test</button>
+<button id="recordBtn" disabled>🎤 Start Recording</button>
+<button id="stopBtn" disabled>⏹ Stop & Upload</button>
+
+<div id="result"></div>
+
+<script>
+  const API_BASE = "https://beltspeakingaiv2.onrender.com";
+  let mediaRecorder;
+  let audioChunks = [];
+  let sessionId = "";
+  let questionsAnswered = 0;
+  const totalQuestions = 6;
+
+  const startTestBtn = document.getElementById("startTestBtn");
+  const recordBtn = document.getElementById("recordBtn");
+  const stopBtn = document.getElementById("stopBtn");
+  const questionBox = document.getElementById("questionBox");
+  const questionAudio = document.getElementById("questionAudio");
+  const progress = document.getElementById("progress");
+  const resultDiv = document.getElementById("result");
+
+  async function updateProgress() {
+    const percent = Math.round((questionsAnswered / totalQuestions) * 100);
+    progress.style.width = percent + "%";
+    progress.innerText = percent + "%";
+  }
+
+  startTestBtn.onclick = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/start_test`, { method: "POST" });
+      const data = await res.json();
+      sessionId = data.session_id;
+      questionBox.innerText = data.question;
+      if (data.audio_url) {
+        questionAudio.src = API_BASE + data.audio_url;
+        questionAudio.style.display = "block";
+      }
+      recordBtn.disabled = false;
+      questionsAnswered = 0;
+      updateProgress();
+    } catch (err) {
+      questionBox.innerText = "Error starting test.";
+      console.error(err);
+    }
+  };
+
+  recordBtn.onclick = async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRecorder = new MediaRecorder(stream);
+    audioChunks = [];
+    mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+    mediaRecorder.start();
+    recordBtn.disabled = true;
+    stopBtn.disabled = false;
+    questionBox.innerText = "🎙️ Recording... Speak now!";
+  };
+
+  stopBtn.onclick = async () => {
+    mediaRecorder.stop();
+    stopBtn.disabled = true;
+    recordBtn.disabled = true;
+    mediaRecorder.onstop = async () => {
+      const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+      const formData = new FormData();
+      formData.append('session_id', sessionId);
+      formData.append('file', audioBlob, 'response.wav');
+
+      questionBox.innerText = "⏳ Uploading your response...";
+
+      try {
+        const res = await fetch(`${API_BASE}/next_question`, {
+          method: "POST",
+          body: formData
+        });
+        const data = await res.json();
+
+        if (data.done) {
+          questionBox.innerText = "✅ Test completed. Calculating your level...";
+          const finalForm = new FormData();
+          finalForm.append('session_id', sessionId);
+          const finalRes = await fetch(`${API_BASE}/final_result`, { method: "POST", body: finalForm });
+          const finalData = await finalRes.json();
+          resultDiv.innerHTML = `<h3>Your estimated CEFR Level: ${finalData.overall_level}</h3>`;
+        } else {
+          questionsAnswered++;
+          updateProgress();
+          questionBox.innerText = data.question;
+          if (data.audio_url) {
+            questionAudio.src = API_BASE + data.audio_url;
+            questionAudio.style.display = "block";
+          }
+          recordBtn.disabled = false;
+        }
+      } catch (err) {
+        questionBox.innerText = "❌ Error uploading or evaluating audio.";
+        console.error(err);
+      }
+    };
+  };
+</script>
+
+</body>
+</html>
