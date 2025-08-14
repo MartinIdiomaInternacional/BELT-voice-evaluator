@@ -80,6 +80,7 @@
   let attemptsAtLevel = 0;
   let passesAtLevel   = 0;
   let mediaRecorder = null, chunks = [];
+  let currentQuestion = ""; // NEW: sent to backend for relevance
 
   const $ = (id) => document.getElementById(id);
   const questionBox = $("questionBox");
@@ -139,6 +140,7 @@
     const lvl = LEVELS[currentLevelIdx];
     const q = pickQuestion(lvl);
     if (!q) throw new Error(`No questions for ${lvl}`);
+    currentQuestion = q; // keep for relevance
     questionBox.textContent = `(${lvl}) ${q}`;
     metaBox.textContent = `Level ${lvl} • Q ${asked+1} of ${TOTAL_QUESTIONS}`;
     speak(q);
@@ -189,7 +191,10 @@
         questionBox.textContent = "⏳ Uploading your response…";
         const res = await fetch(`${API_BASE}/evaluate-bytes`, {
           method: "POST",
-          headers: { "Content-Type": blob.type || "application/octet-stream" },
+          headers: {
+            "Content-Type": blob.type || "application/octet-stream",
+            "X-Question": currentQuestion // NEW header
+          },
           body: await blob.arrayBuffer()
         });
         const data = await res.json();
@@ -236,4 +241,3 @@
 </script>
 </body>
 </html>
-
