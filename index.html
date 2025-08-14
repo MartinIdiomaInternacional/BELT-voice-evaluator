@@ -1,76 +1,29 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CEFR Speaking Evaluator (With TTS)</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>CEFR Speaking Evaluator</title>
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      text-align: center;
-      background: #f5f5f5;
-      padding: 30px;
-    }
-    h1 {
-      color: #2c3e50;
-    }
-    button {
-      padding: 12px 20px;
-      font-size: 16px;
-      margin: 10px;
-      cursor: pointer;
-      background-color: #007BFF;
-      color: white;
-      border: none;
-      border-radius: 5px;
-    }
-    button:disabled {
-      background-color: #ccc;
-      cursor: not-allowed;
-    }
-    .question-box {
-      margin-top: 20px;
-      padding: 15px;
-      background: white;
-      border-radius: 8px;
-      width: 80%;
-      margin-left: auto;
-      margin-right: auto;
-      box-shadow: 0 0 5px rgba(0, 0, 0, 0.1);
-      min-height: 50px;
-    }
-    #progressBar {
-      width: 80%;
-      background-color: #ddd;
-      margin: 20px auto;
-      height: 25px;
-      border-radius: 5px;
-    }
-    #progress {
-      height: 25px;
-      width: 0%;
-      background-color: #4CAF50;
-      text-align: center;
-      color: white;
-      border-radius: 5px;
-      line-height: 25px;
-    }
-    audio {
-      margin-top: 10px;
-    }
+    body { font-family: Arial, sans-serif; text-align:center; background:#f5f5f5; padding:30px; }
+    h1 { color:#2c3e50; }
+    button { padding:12px 20px; font-size:16px; margin:10px; cursor:pointer; background:#007BFF; color:#fff; border:0; border-radius:6px; }
+    button:disabled { background:#ccc; cursor:not-allowed; }
+    .question-box { margin-top:20px; padding:15px; background:#fff; border-radius:8px; width:80%; margin:20px auto 0; box-shadow:0 0 5px rgba(0,0,0,0.1); min-height:50px; }
+    #progressBar { width:80%; background:#ddd; margin:20px auto; height:25px; border-radius:5px; }
+    #progress { height:25px; width:0%; background:#4CAF50; text-align:center; color:#fff; border-radius:5px; line-height:25px; }
+    .meta { margin-top:14px; color:#555; font-size:14px; }
   </style>
 </head>
 <body>
 
-<h1>🎙️ CEFR Speaking Evaluator (With TTS)</h1>
-<p>Answer 5–6 questions progressively to estimate your CEFR speaking level.</p>
+<h1>🎙️ CEFR Speaking Evaluator</h1>
+<p>Answer 6 questions; we’ll estimate your CEFR speaking level.</p>
 
 <div id="progressBar"><div id="progress">0%</div></div>
-
 <div class="question-box" id="questionBox">Click "Start Test" to begin.</div>
-<audio id="questionAudio" controls style="display:none;"></audio>
+<div class="meta" id="metaBox"></div>
 
-<br>
 <button id="startTestBtn">Start Test</button>
 <button id="recordBtn" disabled>🎤 Start Recording</button>
 <button id="stopBtn" disabled>⏹ Stop & Upload</button>
@@ -79,97 +32,170 @@
 
 <script>
   const API_BASE = "https://beltspeakingaiv2.onrender.com";
-  let mediaRecorder;
-  let audioChunks = [];
-  let sessionId = "";
-  let questionsAnswered = 0;
-  const totalQuestions = 6;
 
-  const startTestBtn = document.getElementById("startTestBtn");
-  const recordBtn = document.getElementById("recordBtn");
-  const stopBtn = document.getElementById("stopBtn");
+  // Levels in order of difficulty
+  const LEVELS = ["A1","A2","B1","B1+","B2","B2+","C1","C2"];
+  const TOTAL_QUESTIONS = 6;
+
+  // State
+  let currentLevelIdx = 2; // start around B1 (adjust if you like)
+  let bank = {};           // { level: [questions...] }
+  let asked = 0;
+  let levelVotes = {};     // count of normalized predicted levels
+  let mediaRecorder = null;
+  let chunks = [];
+
+  // UI
   const questionBox = document.getElementById("questionBox");
-  const questionAudio = document.getElementById("questionAudio");
-  const progress = document.getElementById("progress");
-  const resultDiv = document.getElementById("result");
+  const metaBox     = document.getElementById("metaBox");
+  const progress    = document.getElementById("progress");
+  const startBtn    = document.getElementById("startTestBtn");
+  const recBtn      = document.getElementById("recordBtn");
+  const stopBtn     = document.getElementById("stopBtn");
+  const resultDiv   = document.getElementById("result");
 
-  async function updateProgress() {
-    const percent = Math.round((questionsAnswered / totalQuestions) * 100);
-    progress.style.width = percent + "%";
-    progress.innerText = percent + "%";
+  function speak(text){
+    try {
+      const u = new SpeechSynthesisUtterance(text);
+      u.rate = 1.0; u.pitch = 1.0;
+      speechSynthesis.cancel();
+      speechSynthesis.speak(u);
+    } catch(e) {}
   }
 
-  startTestBtn.onclick = async () => {
-    try {
-      const res = await fetch(`${API_BASE}/start_test`, { method: "POST" });
+  function updateProgress(){
+    const pct = Math.round((asked / TOTAL_QUESTIONS) * 100);
+    progress.style.width = pct + "%";
+    progress.innerText = pct + "%";
+  }
+
+  function pickQuestion(level){
+    const arr = bank[level] || [];
+    if (!arr.length) return null;
+    return arr[Math.floor(Math.random()*arr.length)];
+  }
+
+  function normalizeLevelLabel(text){
+    // Server returns strings like "A1-A2 (provisional)" or "B2-C1 (provisional)" or "C1-C2 (provisional)"
+    const core = (text || "").split(" ")[0]; // e.g., "A1-A2"
+    if (core.includes("-")) {
+      const [lo, hi] = core.split("-");
+      // pick the higher of the two to bias upward when borderline
+      return hi;
+    }
+    // If single label (rare), return as is
+    return core || "B1";
+  }
+
+  function adjustDifficulty(predLabel){
+    const predIdx = LEVELS.indexOf(predLabel);
+    if (predIdx === -1) return; // no change
+    if (predIdx > currentLevelIdx) currentLevelIdx = Math.min(currentLevelIdx + 1, LEVELS.length - 1);
+    else if (predIdx < currentLevelIdx) currentLevelIdx = Math.max(currentLevelIdx - 1, 0);
+  }
+
+  async function ensureBanks(){
+    const toFetch = LEVELS.filter(l => !bank[l]);
+    for (const lvl of toFetch){
+      const res = await fetch(`${API_BASE}/prompts/${encodeURIComponent(lvl)}`);
+      if (!res.ok) throw new Error(`Failed to fetch prompts for ${lvl}`);
       const data = await res.json();
-      sessionId = data.session_id;
-      questionBox.innerText = data.question;
-      if (data.audio_url) {
-        questionAudio.src = API_BASE + data.audio_url;
-        questionAudio.style.display = "block";
-      }
-      recordBtn.disabled = false;
-      questionsAnswered = 0;
+      bank[lvl] = data.questions || [];
+    }
+  }
+
+  async function askNext(){
+    const lvl = LEVELS[currentLevelIdx];
+    const q = pickQuestion(lvl);
+    if (!q) throw new Error(`No questions for ${lvl}`);
+    questionBox.innerText = `(${lvl}) ${q}`;
+    metaBox.innerText = `Question ${asked+1} of ${TOTAL_QUESTIONS}`;
+    speak(q);
+    recBtn.disabled = false;
+  }
+
+  startBtn.onclick = async () => {
+    try {
+      startBtn.disabled = true;
+      questionBox.innerText = "Loading questions…";
+      await ensureBanks();
+      asked = 0;
+      levelVotes = {};
       updateProgress();
-    } catch (err) {
+      await askNext();
+    } catch (e) {
       questionBox.innerText = "Error starting test.";
-      console.error(err);
+      console.error(e);
+      startBtn.disabled = false;
     }
   };
 
-  recordBtn.onclick = async () => {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    mediaRecorder = new MediaRecorder(stream);
-    audioChunks = [];
-    mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
-    mediaRecorder.start();
-    recordBtn.disabled = true;
-    stopBtn.disabled = false;
-    questionBox.innerText = "🎙️ Recording... Speak now!";
+  recBtn.onclick = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Prefer webm; most browsers support this with MediaRecorder
+      const mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : undefined;
+      mediaRecorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      chunks = [];
+      mediaRecorder.ondataavailable = e => chunks.push(e.data);
+      mediaRecorder.start();
+      recBtn.disabled = true;
+      stopBtn.disabled = false;
+      questionBox.innerText = "🎙️ Recording… Speak now!";
+    } catch (e) {
+      console.error(e);
+      questionBox.innerText = "Microphone permission denied or not available.";
+    }
   };
 
   stopBtn.onclick = async () => {
-    mediaRecorder.stop();
-    stopBtn.disabled = true;
-    recordBtn.disabled = true;
-    mediaRecorder.onstop = async () => {
-      const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
-      const formData = new FormData();
-      formData.append('session_id', sessionId);
-      formData.append('file', audioBlob, 'response.wav');
+    try {
+      stopBtn.disabled = true;
+      mediaRecorder.stop();
+      mediaRecorder.onstop = async () => {
+        const blob = new Blob(chunks, { type: (chunks[0]?.type || "application/octet-stream") });
+        questionBox.innerText = "⏳ Uploading your response…";
 
-      questionBox.innerText = "⏳ Uploading your response...";
-
-      try {
-        const res = await fetch(`${API_BASE}/next_question`, {
+        // Send raw bytes to /evaluate-bytes
+        const res = await fetch(`${API_BASE}/evaluate-bytes`, {
           method: "POST",
-          body: formData
+          headers: { "Content-Type": blob.type || "application/octet-stream" },
+          body: await blob.arrayBuffer()
         });
-        const data = await res.json();
 
-        if (data.done) {
-          questionBox.innerText = "✅ Test completed. Calculating your level...";
-          const finalForm = new FormData();
-          finalForm.append('session_id', sessionId);
-          const finalRes = await fetch(`${API_BASE}/final_result`, { method: "POST", body: finalForm });
-          const finalData = await finalRes.json();
-          resultDiv.innerHTML = `<h3>Your estimated CEFR Level: ${finalData.overall_level}</h3>`;
-        } else {
-          questionsAnswered++;
-          updateProgress();
-          questionBox.innerText = data.question;
-          if (data.audio_url) {
-            questionAudio.src = API_BASE + data.audio_url;
-            questionAudio.style.display = "block";
-          }
-          recordBtn.disabled = false;
+        const data = await res.json();
+        if (!res.ok) throw new Error(data?.detail || "Upload failed");
+
+        // Tally normalized level (e.g., A1-A2 -> A2)
+        const normalized = normalizeLevelLabel(data.provisional_level);
+        levelVotes[normalized] = (levelVotes[normalized] || 0) + 1;
+
+        asked += 1;
+        updateProgress();
+
+        if (asked >= TOTAL_QUESTIONS) {
+          // Final: choose the most-voted label
+          const final = Object.entries(levelVotes).sort((a,b)=>b[1]-a[1])[0]?.[0] || normalized;
+          questionBox.innerText = "✅ Test completed.";
+          resultDiv.innerHTML = `<h3>Your estimated CEFR Level: ${final}</h3><pre class="meta">${JSON.stringify(levelVotes, null, 2)}</pre>`;
+          startBtn.disabled = false;
+          recBtn.disabled = true;
+          stopBtn.disabled = true;
+          return;
         }
-      } catch (err) {
-        questionBox.innerText = "❌ Error uploading or evaluating audio.";
-        console.error(err);
-      }
-    };
+
+        // Adjust difficulty for next question and continue
+        adjustDifficulty(normalized);
+        await askNext();
+        stopBtn.disabled = true;
+      };
+    } catch (e) {
+      console.error(e);
+      questionBox.innerText = "❌ Error uploading or evaluating audio.";
+      startBtn.disabled = false;
+      recBtn.disabled = false;
+      stopBtn.disabled = true;
+    }
   };
 </script>
 
