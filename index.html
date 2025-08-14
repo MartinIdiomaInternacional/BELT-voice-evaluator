@@ -3,201 +3,237 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>CEFR Speaking Evaluator</title>
+  <title>BELT Speaking Test — Progressive</title>
   <style>
-    body { font-family: Arial, sans-serif; text-align:center; background:#f5f5f5; padding:30px; }
-    h1 { color:#2c3e50; }
-    button { padding:12px 20px; font-size:16px; margin:10px; cursor:pointer; background:#007BFF; color:#fff; border:0; border-radius:6px; }
-    button:disabled { background:#ccc; cursor:not-allowed; }
-    .question-box { margin-top:20px; padding:15px; background:#fff; border-radius:8px; width:80%; margin:20px auto 0; box-shadow:0 0 5px rgba(0,0,0,0.1); min-height:50px; }
-    #progressBar { width:80%; background:#ddd; margin:20px auto; height:25px; border-radius:5px; }
-    #progress { height:25px; width:0%; background:#4CAF50; text-align:center; color:#fff; border-radius:5px; line-height:25px; }
-    .meta { margin-top:14px; color:#555; font-size:14px; }
+    body { font-family: system-ui, Arial, sans-serif; background:#f7f7fa; color:#222; padding:24px; }
+    .wrap { max-width: 860px; margin: 0 auto; }
+    h1 { margin: 0 0 6px; }
+    .sub { color:#666; margin-bottom: 18px; }
+    button { padding:10px 16px; border-radius:8px; border:0; background:#2563eb; color:#fff; cursor:pointer; font-size:16px; }
+    button:disabled { background:#94a3b8; cursor:not-allowed; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    .card { background:#fff; padding:16px; border-radius:10px; box-shadow:0 1px 4px rgba(0,0,0,0.06); margin-top:16px; }
+    .question { font-size:18px; }
+    #progressBar { width:100%; background:#e5e7eb; height:14px; border-radius:8px; }
+    #progress { height:14px; width:0%; background:#22c55e; border-radius:8px; }
+    .meta { color:#555; font-size:14px; }
+    pre { white-space:pre-wrap; word-break:break-word; background:#f9fafb; padding:10px; border-radius:8px; }
+    label small { color:#666; }
+    input[type=text]{ width: 100%; padding: 10px; border:1px solid #ddd; border-radius:8px; }
   </style>
 </head>
 <body>
+<div class="wrap">
+  <h1>🎙️ BELT Speaking Test</h1>
+  <div class="sub">Progressive: starts at A1, only levels up on a pass.</div>
 
-<h1>🎙️ CEFR Speaking Evaluator</h1>
-<p>Answer 6 questions; we’ll estimate your CEFR speaking level.</p>
+  <div class="card">
+    <div class="row">
+      <label style="flex:1">
+        API Base URL<br/>
+        <input id="apiBase" type="text" placeholder="https://<your-service>.onrender.com" />
+        <small>Set this to your deployed API.</small>
+      </label>
+      <div>
+        <button id="btnHealth">Check Health</button>
+      </div>
+    </div>
+    <div id="health" class="meta" style="margin-top:8px;"></div>
+  </div>
 
-<div id="progressBar"><div id="progress">0%</div></div>
-<div class="question-box" id="questionBox">Click "Start Test" to begin.</div>
-<div class="meta" id="metaBox"></div>
+  <div class="card">
+    <div id="progressBar"><div id="progress"></div></div>
+    <div class="question card" id="questionBox" style="margin-top:12px;">Click "Start Test" to begin.</div>
+    <div class="meta" id="metaBox"></div>
+    <div class="row" style="margin-top:8px;">
+      <button id="startTestBtn">Start Test</button>
+      <button id="recordBtn" disabled>🎤 Start Recording</button>
+      <button id="stopBtn" disabled>⏹ Stop & Upload</button>
+    </div>
+  </div>
 
-<button id="startTestBtn">Start Test</button>
-<button id="recordBtn" disabled>🎤 Start Recording</button>
-<button id="stopBtn" disabled>⏹ Stop & Upload</button>
+  <div class="card">
+    <h3>Result</h3>
+    <div id="result"></div>
+  </div>
 
-<div id="result"></div>
+  <div class="card">
+    <details>
+      <summary>Debug (last response)</summary>
+      <pre id="debug"></pre>
+    </details>
+  </div>
+</div>
 
 <script>
-  const API_BASE = "https://beltspeakingaiv2.onrender.com";
-
-  // Levels in order of difficulty
+(() => {
   const LEVELS = ["A1","A2","B1","B1+","B2","B2+","C1","C2"];
-  const TOTAL_QUESTIONS = 6;
+  const TOTAL_QUESTIONS = 8;
+  const PASS_TO_ADVANCE = 1;
+  const FAILS_TO_DROP   = 2;
 
-  // State
-  let currentLevelIdx = 2; // start around B1 (adjust if you like)
-  let bank = {};           // { level: [questions...] }
+  let API_BASE = "";
+  let currentLevelIdx = 0; // start at A1
+  let bank = {};
   let asked = 0;
-  let levelVotes = {};     // count of normalized predicted levels
-  let mediaRecorder = null;
-  let chunks = [];
+  let levelVotes = {};
+  let attemptsAtLevel = 0;
+  let passesAtLevel   = 0;
+  let mediaRecorder = null, chunks = [];
 
-  // UI
-  const questionBox = document.getElementById("questionBox");
-  const metaBox     = document.getElementById("metaBox");
-  const progress    = document.getElementById("progress");
-  const startBtn    = document.getElementById("startTestBtn");
-  const recBtn      = document.getElementById("recordBtn");
-  const stopBtn     = document.getElementById("stopBtn");
-  const resultDiv   = document.getElementById("result");
+  const $ = (id) => document.getElementById(id);
+  const questionBox = $("questionBox");
+  const metaBox     = $("metaBox");
+  const progress    = $("progress");
+  const startBtn    = $("startTestBtn");
+  const recBtn      = $("recordBtn");
+  const stopBtn     = $("stopBtn");
+  const resultDiv   = $("result");
+  const debugPre    = $("debug");
+  const apiBaseInput= $("apiBase");
+  const btnHealth   = $("btnHealth");
+  const healthDiv   = $("health");
+
+  btnHealth.onclick = async () => {
+    API_BASE = apiBaseInput.value.trim();
+    if (!API_BASE) return alert("Please set API Base URL first.");
+    try {
+      const r = await fetch(`${API_BASE}/health`);
+      const j = await r.json();
+      healthDiv.textContent = JSON.stringify(j);
+    } catch (e) {
+      healthDiv.textContent = "Health check failed.";
+    }
+  };
 
   function speak(text){
-    try {
-      const u = new SpeechSynthesisUtterance(text);
-      u.rate = 1.0; u.pitch = 1.0;
-      speechSynthesis.cancel();
-      speechSynthesis.speak(u);
-    } catch(e) {}
+    try { const u=new SpeechSynthesisUtterance(text); speechSynthesis.cancel(); speechSynthesis.speak(u); } catch(e){}
   }
-
   function updateProgress(){
     const pct = Math.round((asked / TOTAL_QUESTIONS) * 100);
     progress.style.width = pct + "%";
-    progress.innerText = pct + "%";
   }
-
   function pickQuestion(level){
     const arr = bank[level] || [];
     if (!arr.length) return null;
     return arr[Math.floor(Math.random()*arr.length)];
   }
-
-  function normalizeLevelLabel(text){
-    // Server returns strings like "A1-A2 (provisional)" or "B2-C1 (provisional)" or "C1-C2 (provisional)"
-    const core = (text || "").split(" ")[0]; // e.g., "A1-A2"
-    if (core.includes("-")) {
-      const [lo, hi] = core.split("-");
-      // pick the higher of the two to bias upward when borderline
-      return hi;
-    }
-    // If single label (rare), return as is
+  function normalizeLevelLabel(label){
+    const core = (label||"").split(" ")[0];
+    if (core.includes("-")) return core.split("-")[1];
     return core || "B1";
   }
-
-  function adjustDifficulty(predLabel){
-    const predIdx = LEVELS.indexOf(predLabel);
-    if (predIdx === -1) return; // no change
-    if (predIdx > currentLevelIdx) currentLevelIdx = Math.min(currentLevelIdx + 1, LEVELS.length - 1);
-    else if (predIdx < currentLevelIdx) currentLevelIdx = Math.max(currentLevelIdx - 1, 0);
+  function passedCurrentLevel(predLabel){
+    return LEVELS.indexOf(predLabel) >= currentLevelIdx;
   }
-
   async function ensureBanks(){
     const toFetch = LEVELS.filter(l => !bank[l]);
     for (const lvl of toFetch){
-      const res = await fetch(`${API_BASE}/prompts/${encodeURIComponent(lvl)}`);
-      if (!res.ok) throw new Error(`Failed to fetch prompts for ${lvl}`);
-      const data = await res.json();
+      const r = await fetch(`${API_BASE}/prompts/${encodeURIComponent(lvl)}`);
+      if (!r.ok) throw new Error(`Failed prompts for ${lvl}`);
+      const data = await r.json();
       bank[lvl] = data.questions || [];
     }
   }
-
   async function askNext(){
     const lvl = LEVELS[currentLevelIdx];
     const q = pickQuestion(lvl);
     if (!q) throw new Error(`No questions for ${lvl}`);
-    questionBox.innerText = `(${lvl}) ${q}`;
-    metaBox.innerText = `Question ${asked+1} of ${TOTAL_QUESTIONS}`;
+    questionBox.textContent = `(${lvl}) ${q}`;
+    metaBox.textContent = `Level ${lvl} • Q ${asked+1} of ${TOTAL_QUESTIONS}`;
     speak(q);
     recBtn.disabled = false;
   }
 
   startBtn.onclick = async () => {
+    API_BASE = apiBaseInput.value.trim();
+    if (!API_BASE) return alert("Please set API Base URL first.");
+    startBtn.disabled = true; recBtn.disabled = true; stopBtn.disabled = true;
+    resultDiv.innerHTML = ""; questionBox.textContent = "Loading questions…";
     try {
-      startBtn.disabled = true;
-      questionBox.innerText = "Loading questions…";
       await ensureBanks();
-      asked = 0;
-      levelVotes = {};
+      currentLevelIdx   = 0; // A1
+      asked             = 0;
+      attemptsAtLevel   = 0;
+      passesAtLevel     = 0;
+      levelVotes        = {};
       updateProgress();
       await askNext();
-    } catch (e) {
-      questionBox.innerText = "Error starting test.";
-      console.error(e);
-      startBtn.disabled = false;
+    } catch (e){
+      console.error(e); questionBox.textContent = "Error starting test."; startBtn.disabled = false;
     }
   };
 
   recBtn.onclick = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      // Prefer webm; most browsers support this with MediaRecorder
-      const mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : undefined;
-      mediaRecorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? { mimeType: "audio/webm;codecs=opus" } : undefined;
+      mediaRecorder = new MediaRecorder(stream, mime);
       chunks = [];
       mediaRecorder.ondataavailable = e => chunks.push(e.data);
       mediaRecorder.start();
-      recBtn.disabled = true;
-      stopBtn.disabled = false;
-      questionBox.innerText = "🎙️ Recording… Speak now!";
+      recBtn.disabled = true; stopBtn.disabled = false;
+      questionBox.textContent = "🎙️ Recording… Speak now!";
     } catch (e) {
       console.error(e);
-      questionBox.innerText = "Microphone permission denied or not available.";
+      questionBox.textContent = "Microphone permission denied or unavailable.";
     }
   };
 
   stopBtn.onclick = async () => {
-    try {
-      stopBtn.disabled = true;
-      mediaRecorder.stop();
-      mediaRecorder.onstop = async () => {
+    stopBtn.disabled = true;
+    mediaRecorder.stop();
+    mediaRecorder.onstop = async () => {
+      try {
         const blob = new Blob(chunks, { type: (chunks[0]?.type || "application/octet-stream") });
-        questionBox.innerText = "⏳ Uploading your response…";
-
-        // Send raw bytes to /evaluate-bytes
+        questionBox.textContent = "⏳ Uploading your response…";
         const res = await fetch(`${API_BASE}/evaluate-bytes`, {
           method: "POST",
           headers: { "Content-Type": blob.type || "application/octet-stream" },
           body: await blob.arrayBuffer()
         });
-
         const data = await res.json();
+        debugPre.textContent = JSON.stringify(data, null, 2);
         if (!res.ok) throw new Error(data?.detail || "Upload failed");
 
-        // Tally normalized level (e.g., A1-A2 -> A2)
         const normalized = normalizeLevelLabel(data.provisional_level);
         levelVotes[normalized] = (levelVotes[normalized] || 0) + 1;
 
-        asked += 1;
-        updateProgress();
+        asked++; updateProgress();
+
+        attemptsAtLevel++;
+        if (passedCurrentLevel(normalized)) {
+          passesAtLevel++;
+        } else {
+          passesAtLevel = 0;
+        }
+
+        if (passesAtLevel >= PASS_TO_ADVANCE && currentLevelIdx < LEVELS.length - 1) {
+          currentLevelIdx++; attemptsAtLevel = 0; passesAtLevel = 0;
+        } else if (attemptsAtLevel >= FAILS_TO_DROP && !passedCurrentLevel(normalized) && currentLevelIdx > 0) {
+          currentLevelIdx--; attemptsAtLevel = 0; passesAtLevel = 0;
+        }
 
         if (asked >= TOTAL_QUESTIONS) {
-          // Final: choose the most-voted label
           const final = Object.entries(levelVotes).sort((a,b)=>b[1]-a[1])[0]?.[0] || normalized;
-          questionBox.innerText = "✅ Test completed.";
-          resultDiv.innerHTML = `<h3>Your estimated CEFR Level: ${final}</h3><pre class="meta">${JSON.stringify(levelVotes, null, 2)}</pre>`;
-          startBtn.disabled = false;
-          recBtn.disabled = true;
-          stopBtn.disabled = true;
+          questionBox.textContent = "✅ Test completed.";
+          resultDiv.innerHTML = `<h3>Your estimated CEFR Level: ${final}</h3>
+            <div class="meta">Votes: ${JSON.stringify(levelVotes)}</div>`;
+          startBtn.disabled = false; recBtn.disabled = true; stopBtn.disabled = true;
           return;
         }
 
-        // Adjust difficulty for next question and continue
-        adjustDifficulty(normalized);
         await askNext();
         stopBtn.disabled = true;
-      };
-    } catch (e) {
-      console.error(e);
-      questionBox.innerText = "❌ Error uploading or evaluating audio.";
-      startBtn.disabled = false;
-      recBtn.disabled = false;
-      stopBtn.disabled = true;
-    }
+      } catch (e) {
+        console.error(e);
+        questionBox.textContent = "❌ Error uploading or evaluating audio.";
+        startBtn.disabled = false; recBtn.disabled = false; stopBtn.disabled = true;
+      }
+    };
   };
+})();
 </script>
-
 </body>
 </html>
+
