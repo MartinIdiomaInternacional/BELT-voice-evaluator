@@ -2,35 +2,49 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>BELT Speaking Test — Progressive</title>
+<title>BELT Speaking Test — Progressive (CEFR 5-dim)</title>
 <style>
-  body{font-family:system-ui,Arial,sans-serif;background:#f7f7fa;color:#222;padding:24px}
-  .wrap{max-width:860px;margin:0 auto}.sub{color:#666;margin-bottom:18px}
-  button{padding:10px 16px;border-radius:8px;border:0;background:#2563eb;color:#fff;cursor:pointer;font-size:16px}
-  button:disabled{background:#94a3b8;cursor:not-allowed}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-  .card{background:#fff;padding:16px;border-radius:10px;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-top:16px}
-  .question{font-size:18px}#progressBar{width:100%;background:#e5e7eb;height:14px;border-radius:8px}
-  #progress{height:14px;width:0%;background:#22c55e;border-radius:8px}.meta{color:#555;font-size:14px}
+  :root{--bg:#f7f7fa;--fg:#222;--muted:#666;--card:#fff;--bar:#2563eb;--ok:#22c55e;--warn:#f59e0b;--bad:#ef4444}
+  body{font-family:system-ui,Arial,sans-serif;background:var(--bg);color:var(--fg);padding:24px}
+  .wrap{max-width:920px;margin:0 auto}
+  h1{margin:0 0 6px}.sub{color:var(--muted);margin-bottom:18px}
+  button{padding:10px 16px;border-radius:8px;border:0;background:var(--bar);color:#fff;cursor:pointer;font-size:16px}
+  button:disabled{background:#94a3b8;cursor:not-allowed}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .card{background:var(--card);padding:16px;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-top:16px}
+  .question{font-size:18px}
+  #progressBar{width:100%;background:#e5e7eb;height:14px;border-radius:8px}
+  #progress{height:14px;width:0%;background:var(--ok);border-radius:8px}
+  .meta{color:#555;font-size:14px}
   pre{white-space:pre-wrap;word-break:break-word;background:#f9fafb;padding:10px;border-radius:8px}
+  label small{color:var(--muted)} input[type=text]{width:100%;padding:10px;border:1px solid #ddd;border-radius:8px}
   ul{margin:6px 0 0 20px}
+  .bars{margin-top:8px}
+  .bar{display:flex;align-items:center;gap:10px;margin:10px 0}
+  .bar .label{width:150px}
+  .bar .track{flex:1;background:#e5e7eb;border-radius:999px;height:12px;overflow:hidden}
+  .bar .fill{height:12px;border-radius:999px;background:var(--bar);width:0%}
+  .bar .pct{width:46px;text-align:right;font-variant-numeric:tabular-nums}
+  .hint{font-size:13px;color:var(--muted)}
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>🎙️ BELT Speaking Test</h1>
-  <div class="sub">Progressive: starts at A1, only levels up on a pass.</div>
+  <div class="sub">Progressive A1 → C2; final report shows relevance, fluency, grammar, pronunciation, and vocabulary.</div>
 
+  <!-- Settings (Health check removed) -->
   <div class="card">
     <div class="row">
       <label style="flex:1">API Base URL<br/>
         <input id="apiBase" type="text" placeholder="https://<your-service>.onrender.com"/>
-        <small>Set this to your deployed API.</small>
+        <small>This should point to your deployed FastAPI service.</small>
       </label>
-      <div><button id="btnHealth">Check Health</button></div>
+      <div class="hint">No health check needed—just set the URL and start.</div>
     </div>
-    <div id="health" class="meta" style="margin-top:8px;"></div>
   </div>
 
+  <!-- Test runner -->
   <div class="card">
     <div id="progressBar"><div id="progress"></div></div>
     <div class="question card" id="questionBox" style="margin-top:12px;">Click "Start Test" to begin.</div>
@@ -42,114 +56,195 @@
     </div>
   </div>
 
+  <!-- Results -->
   <div class="card">
     <h3>Result</h3>
     <div id="result"></div>
   </div>
 
+  <!-- Debug -->
   <div class="card"><details><summary>Debug (last response)</summary><pre id="debug"></pre></details></div>
 </div>
 
 <script>
 (() => {
+  // ---- Configure this to your deployment for convenience ----
+  const DEFAULT_API = "https://beltspeakingaiv2.onrender.com"; // change if needed
+
   const LEVELS = ["A1","A2","B1","B1+","B2","B2+","C1","C2"];
   const TOTAL_QUESTIONS = 8, PASS_TO_ADVANCE = 1, FAILS_TO_DROP = 2;
 
   let API_BASE = "", currentLevelIdx = 0, bank = {}, asked = 0;
   let levelVotes = {}, attemptsAtLevel = 0, passesAtLevel = 0;
   let mediaRecorder = null, chunks = [], currentQuestion = "";
-  let sessionFeedback = []; // NEW: collect feedback per response
+  let sessionFeedback = []; // per-turn feedback objects
+  let sessionScores = [];   // per-turn {relevance, fluency, grammar, pronunciation, vocabulary}
 
   const $=id=>document.getElementById(id);
-  const questionBox=$("questionBox"), metaBox=$("metaBox"), progress=$("progress");
-  const startBtn=$("startTestBtn"), recBtn=$("recordBtn"), stopBtn=$("stopBtn");
-  const resultDiv=$("result"), debugPre=$("debug"), apiBaseInput=$("apiBase");
-  const btnHealth=$("btnHealth"), healthDiv=$("health");
+  const apiBaseInput=$("apiBase"), questionBox=$("questionBox"), metaBox=$("metaBox"), progress=$("progress");
+  const startBtn=$("startTestBtn"), recBtn=$("recordBtn"), stopBtn=$("stopBtn"), resultDiv=$("result"), debugPre=$("debug");
 
-  btnHealth.onclick = async () => {
-    API_BASE = apiBaseInput.value.trim();
-    if (!API_BASE) return alert("Set API Base URL first.");
-    try { const r=await fetch(`${API_BASE}/health`); healthDiv.textContent=JSON.stringify(await r.json()); }
-    catch{ healthDiv.textContent="Health check failed."; }
-  };
+  // Prefill API
+  window.addEventListener("DOMContentLoaded", ()=>{ apiBaseInput.value = DEFAULT_API; });
 
+  // ---------- UI helpers ----------
   function speak(t){ try{const u=new SpeechSynthesisUtterance(t); speechSynthesis.cancel(); speechSynthesis.speak(u);}catch{} }
   function updateProgress(){ progress.style.width = Math.round((asked/TOTAL_QUESTIONS)*100)+"%"; }
   function pickQuestion(level){ const arr=bank[level]||[]; return arr.length?arr[Math.floor(Math.random()*arr.length)]:null; }
   function normalizeLevelLabel(label){ const core=(label||"").split(" ")[0]; return core.includes("-")?core.split("-")[1]:core||"B1"; }
   function passedCurrentLevel(pred){ return LEVELS.indexOf(pred)>=currentLevelIdx; }
-  async function ensureBanks(){ for (const l of LEVELS.filter(l=>!bank[l])) { const d=await (await fetch(`${API_BASE}/prompts/${encodeURIComponent(l)}`)).json(); bank[l]=d.questions||[]; } }
+  function pct(x){ return Math.round(Math.max(0, Math.min(1, +x || 0))*100); }
+
+  function limitingFactors(avgDims){
+    // Return dims under 55% OR the two lowest if all high
+    const entries = Object.entries(avgDims).sort((a,b)=>a[1]-b[1]);
+    const under = entries.filter(([k,v])=>v<0.55).map(([k])=>k);
+    if (under.length) return under.slice(0,3);
+    return entries.slice(0,2).map(([k])=>k);
+  }
+
+  function barsHTML(dims){
+    const NAMES = {relevance:"Relevance", fluency:"Fluency", grammar:"Grammar", pronunciation:"Pronunciation", vocabulary:"Vocabulary"};
+    const rows = Object.keys(NAMES).map(k=>{
+      const p = pct(dims[k]);
+      let color = "var(--bar)";
+      if (p >= 70) color = "var(--ok)";
+      else if (p < 55) color = "var(--bad)";
+      else color = "var(--warn)";
+      return `
+        <div class="bar">
+          <div class="label">${NAMES[k]}</div>
+          <div class="track"><div class="fill" style="width:${p}%; background:${color}"></div></div>
+          <div class="pct">${p}%</div>
+        </div>`;
+    }).join("");
+    return `<div class="bars">${rows}</div>`;
+  }
+
+  // ---------- Data helpers ----------
+  async function ensureBanks(){
+    for (const lvl of LEVELS.filter(l=>!bank[l])) {
+      const r = await fetch(`${API_BASE}/prompts/${encodeURIComponent(lvl)}`);
+      if (!r.ok) throw new Error(`Failed prompts for ${lvl}`);
+      const d = await r.json();
+      bank[lvl] = d.questions || [];
+    }
+  }
   async function askNext(){
-    const lvl=LEVELS[currentLevelIdx]; const q=pickQuestion(lvl); if(!q) throw new Error(`No questions for ${lvl}`);
+    const lvl=LEVELS[currentLevelIdx]; const q=pickQuestion(lvl);
+    if(!q) throw new Error(`No questions for ${lvl}`);
     currentQuestion=q; questionBox.textContent=`(${lvl}) ${q}`; metaBox.textContent=`Level ${lvl} • Q ${asked+1} of ${TOTAL_QUESTIONS}`; speak(q); recBtn.disabled=false;
   }
-  function agg(list){
-    const top = (arr)=>Object.entries(arr.reduce((m,x)=>(m[x]=(m[x]||0)+1,m),{})).sort((a,b)=>b[1]-a[1]).map(([k])=>k);
-    const strengths = top(list.flatMap(f=>f.strengths||[])).slice(0,5);
-    const areas     = top(list.flatMap(f=>f.areas||[])).slice(0,5);
-    const tips      = top(list.flatMap(f=>f.tips||[])).slice(0,5);
+
+  function aggregateFeedback(list){
+    const tally = (arr)=>Object.entries(arr.reduce((m,x)=>(m[x]=(m[x]||0)+1,m),{})).sort((a,b)=>b[1]-a[1]).map(([k])=>k);
+    const strengths=tally(list.flatMap(f=>f.strengths||[])).slice(0,5);
+    const areas    =tally(list.flatMap(f=>f.areas||[])).slice(0,5);
+    const tips     =tally(list.flatMap(f=>f.tips||[])).slice(0,5);
     return {strengths, areas, tips};
   }
-
-  async function start(){
-    API_BASE=apiBaseInput.value.trim(); if(!API_BASE) return alert("Set API Base URL first.");
-    startBtn.disabled=true; recBtn.disabled=true; stopBtn.disabled=true;
-    resultDiv.innerHTML=""; questionBox.textContent="Loading questions…";
-    await ensureBanks();
-    currentLevelIdx=0; asked=0; attemptsAtLevel=0; passesAtLevel=0; levelVotes={}; sessionFeedback=[];
-    updateProgress(); await askNext();
+  function aggregateScores(arr){
+    const keys=["relevance","fluency","grammar","pronunciation","vocabulary"];
+    const out={}; for(const k of keys){ out[k]= arr.reduce((s,x)=>s+(+x[k]||0),0) / Math.max(1,arr.length); }
+    return out;
   }
 
-  $("startTestBtn").onclick = start;
-
-  $("recordBtn").onclick = async () => {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? { mimeType:"audio/webm;codecs=opus" } : undefined;
-    mediaRecorder = new MediaRecorder(stream, mime); chunks=[]; mediaRecorder.ondataavailable=e=>chunks.push(e.data);
-    mediaRecorder.start(); recBtn.disabled=true; stopBtn.disabled=false; questionBox.textContent="🎙️ Recording… Speak now!";
+  // ---------- Start flow ----------
+  startBtn.onclick = async () => {
+    API_BASE = apiBaseInput.value.trim();
+    if (!API_BASE) return alert("Set API Base URL first.");
+    startBtn.disabled=true; recBtn.disabled=true; stopBtn.disabled=true;
+    resultDiv.innerHTML=""; questionBox.textContent="Loading questions…";
+    try {
+      await ensureBanks();
+      currentLevelIdx=0; asked=0; attemptsAtLevel=0; passesAtLevel=0; levelVotes={}; sessionFeedback=[]; sessionScores=[];
+      updateProgress(); await askNext();
+    } catch (e){
+      console.error(e); questionBox.textContent="Error starting test."; startBtn.disabled=false;
+    }
   };
 
-  $("stopBtn").onclick = async () => {
+  // ---------- Recording ----------
+  recBtn.onclick = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? { mimeType:"audio/webm;codecs=opus" } : undefined;
+      mediaRecorder = new MediaRecorder(stream, mime);
+      chunks=[]; mediaRecorder.ondataavailable=e=>chunks.push(e.data);
+      mediaRecorder.start();
+      recBtn.disabled=true; stopBtn.disabled=false;
+      questionBox.textContent = "🎙️ Recording… Speak now!";
+    } catch (e){
+      console.error(e); questionBox.textContent="Microphone permission denied or unavailable.";
+    }
+  };
+
+  stopBtn.onclick = async () => {
     stopBtn.disabled=true; mediaRecorder.stop();
     mediaRecorder.onstop = async () => {
-      const blob = new Blob(chunks, { type: (chunks[0]?.type || "application/octet-stream") });
-      questionBox.textContent="⏳ Uploading your response…";
-      const res = await fetch(`${API_BASE}/evaluate-bytes`, {
-        method:"POST", headers:{ "Content-Type": blob.type || "application/octet-stream", "X-Question": currentQuestion },
-        body: await blob.arrayBuffer()
-      });
-      const data = await res.json(); debugPre.textContent = JSON.stringify(data,null,2);
-      if(!res.ok) { questionBox.textContent="❌ Error uploading or evaluating audio."; startBtn.disabled=false; recBtn.disabled=false; return; }
+      try {
+        const blob = new Blob(chunks, { type: (chunks[0]?.type || "application/octet-stream") });
+        questionBox.textContent="⏳ Uploading your response…";
+        const res = await fetch(`${API_BASE}/evaluate-bytes`, {
+          method:"POST",
+          headers:{ "Content-Type": blob.type || "application/octet-stream", "X-Question": currentQuestion },
+          body: await blob.arrayBuffer()
+        });
+        const data = await res.json();
+        debugPre.textContent = JSON.stringify(data, null, 2);
+        if (!res.ok) throw new Error(data?.detail || "Upload failed");
 
-      if (data.feedback) sessionFeedback.push(data.feedback);
+        // Collect per-turn scores (v1.0 dimensions)
+        const s = data.scores || {};
+        sessionScores.push({
+          relevance: +s.relevance || 0,
+          fluency: +s.fluency || 0,
+          grammar: +s.grammar || 0,
+          pronunciation: +s.pronunciation || 0,
+          vocabulary: +s.vocabulary || 0
+        });
 
-      const normalized = normalizeLevelLabel(data.provisional_level);
-      levelVotes[normalized]=(levelVotes[normalized]||0)+1;
+        // Feedback
+        if (data.feedback) sessionFeedback.push(data.feedback);
 
-      asked++; updateProgress(); attemptsAtLevel++;
-      if (LEVELS.indexOf(normalized)>=currentLevelIdx) passesAtLevel++; else passesAtLevel=0;
+        const normalized = normalizeLevelLabel(data.provisional_level);
+        levelVotes[normalized]=(levelVotes[normalized]||0)+1;
 
-      if (passesAtLevel>=PASS_TO_ADVANCE && currentLevelIdx<LEVELS.length-1){ currentLevelIdx++; attemptsAtLevel=0; passesAtLevel=0; }
-      else if (attemptsAtLevel>=FAILS_TO_DROP && LEVELS.indexOf(normalized)<currentLevelIdx && currentLevelIdx>0){ currentLevelIdx--; attemptsAtLevel=0; passesAtLevel=0; }
+        asked++; updateProgress(); attemptsAtLevel++;
+        if (LEVELS.indexOf(normalized)>=currentLevelIdx) passesAtLevel++; else passesAtLevel=0;
 
-      if (asked>=TOTAL_QUESTIONS){
-        const final = Object.entries(levelVotes).sort((a,b)=>b[1]-a[1])[0]?.[0] || normalized;
-        const A = agg(sessionFeedback);
-        const bullets = (title, arr)=> arr.length?(`<h4>${title}</h4><ul>`+arr.map(x=>`<li>${x}</li>`).join("")+`</ul>`):"";
-        questionBox.textContent="✅ Test completed.";
-        resultDiv.innerHTML = `
-          <h3>Your estimated CEFR Level: ${final}</h3>
-          <div class="meta">Votes: ${JSON.stringify(levelVotes)}</div>
-          <h4>Why you got this result</h4>
-          <p>We analyzed fluency (pauses/speaking time), lexical variety, filler words, and how closely your answer matched the question.</p>
-          ${bullets("Top strengths", A.strengths)}
-          ${bullets("Focus areas", A.areas)}
-          ${bullets("Tips for improvement", A.tips)}
-        `;
-        startBtn.disabled=false; recBtn.disabled=true; stopBtn.disabled=true; return;
+        if (passesAtLevel>=PASS_TO_ADVANCE && currentLevelIdx<LEVELS.length-1){ currentLevelIdx++; attemptsAtLevel=0; passesAtLevel=0; }
+        else if (attemptsAtLevel>=FAILS_TO_DROP && LEVELS.indexOf(normalized)<currentLevelIdx && currentLevelIdx>0){ currentLevelIdx--; attemptsAtLevel=0; passesAtLevel=0; }
+
+        if (asked>=TOTAL_QUESTIONS){
+          const final = Object.entries(levelVotes).sort((a,b)=>b[1]-a[1])[0]?.[0] || normalized;
+          const A = aggregateFeedback(sessionFeedback);
+          const D = aggregateScores(sessionScores);
+          const lows = limitingFactors(D);
+          const bullets = (title, arr)=> arr.length?(`<h4>${title}</h4><ul>`+arr.map(x=>`<li>${x}</li>`).join("")+`</ul>`):"";
+
+          questionBox.textContent="✅ Test completed.";
+          resultDiv.innerHTML = `
+            <h3>Your estimated CEFR Level: ${final}</h3>
+            <div class="meta">Votes by level: ${JSON.stringify(levelVotes)}</div>
+            <h4>Five-dimension profile (average of your answers)</h4>
+            ${barsHTML(D)}
+            <p class="hint">Limiting factors for a higher level: <strong>${lows.join(", ") || "—"}</strong></p>
+            <h4>Why you got this result</h4>
+            <p>We analyzed: relevance to the question, fluency (pauses/pace/fillers), grammar accuracy, pronunciation proxies, and vocabulary range.</p>
+            ${bullets("Top strengths", A.strengths)}
+            ${bullets("Focus areas", A.areas)}
+            ${bullets("Tips for improvement", A.tips)}
+          `;
+          startBtn.disabled=false; recBtn.disabled=true; stopBtn.disabled=true; return;
+        }
+
+        await askNext(); stopBtn.disabled=true;
+      } catch (e){
+        console.error(e);
+        questionBox.textContent = "❌ Error uploading or evaluating audio.";
+        startBtn.disabled = false; recBtn.disabled = false; stopBtn.disabled = true;
       }
-
-      await askNext(); stopBtn.disabled=true;
     };
   };
 })();
