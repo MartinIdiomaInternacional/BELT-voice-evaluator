@@ -17,7 +17,6 @@
   #progress{height:14px;width:0%;background:var(--ok);border-radius:8px}
   .meta{color:#555;font-size:14px}
   pre{white-space:pre-wrap;word-break:break-word;background:#f9fafb;padding:10px;border-radius:8px}
-  label small{color:var(--muted)} input[type=text]{width:100%;padding:10px;border:1px solid #ddd;border-radius:8px}
   ul{margin:6px 0 0 20px}
   .bars{margin-top:8px}
   .bar{display:flex;align-items:center;gap:10px;margin:10px 0}
@@ -31,18 +30,7 @@
 <body>
 <div class="wrap">
   <h1>🎙️ BELT Speaking Test</h1>
-  <div class="sub">Progressive A1 → C2; final report shows relevance, fluency, grammar, pronunciation, and vocabulary.</div>
-
-  <!-- Settings (Health check removed) -->
-  <div class="card">
-    <div class="row">
-      <label style="flex:1">API Base URL<br/>
-        <input id="apiBase" type="text" placeholder="https://<your-service>.onrender.com"/>
-        <small>This should point to your deployed FastAPI service.</small>
-      </label>
-      <div class="hint">No health check needed—just set the URL and start.</div>
-    </div>
-  </div>
+  <div class="sub">Progressive A1 → C2 with CEFR dimensions: relevance, fluency, grammar, pronunciation, vocabulary.</div>
 
   <!-- Test runner -->
   <div class="card">
@@ -68,60 +56,55 @@
 
 <script>
 (() => {
-  // ---- Configure this to your deployment for convenience ----
-  const DEFAULT_API = "https://beltspeakingaiv2.onrender.com"; // change if needed
+  // Hard-wired API base
+  const API_BASE = "https://beltspeakingaiv2.onrender.com";
 
   const LEVELS = ["A1","A2","B1","B1+","B2","B2+","C1","C2"];
   const TOTAL_QUESTIONS = 8, PASS_TO_ADVANCE = 1, FAILS_TO_DROP = 2;
 
-  let API_BASE = "", currentLevelIdx = 0, bank = {}, asked = 0;
+  let currentLevelIdx = 0, bank = {}, asked = 0;
   let levelVotes = {}, attemptsAtLevel = 0, passesAtLevel = 0;
   let mediaRecorder = null, chunks = [], currentQuestion = "";
-  let sessionFeedback = []; // per-turn feedback objects
+  let sessionFeedback = []; // per-turn feedback
   let sessionScores = [];   // per-turn {relevance, fluency, grammar, pronunciation, vocabulary}
 
   const $=id=>document.getElementById(id);
-  const apiBaseInput=$("apiBase"), questionBox=$("questionBox"), metaBox=$("metaBox"), progress=$("progress");
-  const startBtn=$("startTestBtn"), recBtn=$("recordBtn"), stopBtn=$("stopBtn"), resultDiv=$("result"), debugPre=$("debug");
+  const questionBox=$("questionBox"), metaBox=$("metaBox"), progress=$("progress");
+  const startBtn=$("startTestBtn"), recBtn=$("recordBtn"), stopBtn=$("stopBtn");
+  const resultDiv=$("result"), debugPre=$("debug");
 
-  // Prefill API
-  window.addEventListener("DOMContentLoaded", ()=>{ apiBaseInput.value = DEFAULT_API; });
-
-  // ---------- UI helpers ----------
+  // ---------- helpers ----------
   function speak(t){ try{const u=new SpeechSynthesisUtterance(t); speechSynthesis.cancel(); speechSynthesis.speak(u);}catch{} }
   function updateProgress(){ progress.style.width = Math.round((asked/TOTAL_QUESTIONS)*100)+"%"; }
   function pickQuestion(level){ const arr=bank[level]||[]; return arr.length?arr[Math.floor(Math.random()*arr.length)]:null; }
   function normalizeLevelLabel(label){ const core=(label||"").split(" ")[0]; return core.includes("-")?core.split("-")[1]:core||"B1"; }
-  function passedCurrentLevel(pred){ return LEVELS.indexOf(pred)>=currentLevelIdx; }
   function pct(x){ return Math.round(Math.max(0, Math.min(1, +x || 0))*100); }
 
   function limitingFactors(avgDims){
-    // Return dims under 55% OR the two lowest if all high
     const entries = Object.entries(avgDims).sort((a,b)=>a[1]-b[1]);
     const under = entries.filter(([k,v])=>v<0.55).map(([k])=>k);
-    if (under.length) return under.slice(0,3);
-    return entries.slice(0,2).map(([k])=>k);
+    return under.length ? under.slice(0,3) : entries.slice(0,2).map(([k])=>k);
   }
 
   function barsHTML(dims){
     const NAMES = {relevance:"Relevance", fluency:"Fluency", grammar:"Grammar", pronunciation:"Pronunciation", vocabulary:"Vocabulary"};
-    const rows = Object.keys(NAMES).map(k=>{
-      const p = pct(dims[k]);
-      let color = "var(--bar)";
-      if (p >= 70) color = "var(--ok)";
-      else if (p < 55) color = "var(--bad)";
-      else color = "var(--warn)";
-      return `
-        <div class="bar">
-          <div class="label">${NAMES[k]}</div>
-          <div class="track"><div class="fill" style="width:${p}%; background:${color}"></div></div>
-          <div class="pct">${p}%</div>
-        </div>`;
-    }).join("");
-    return `<div class="bars">${rows}</div>`;
+    return `<div class="bars">${
+      Object.keys(NAMES).map(k=>{
+        const p = pct(dims[k]);
+        let color = "var(--bar)";
+        if (p >= 70) color = "var(--ok)";
+        else if (p < 55) color = "var(--bad)";
+        else color = "var(--warn)";
+        return `
+          <div class="bar">
+            <div class="label">${NAMES[k]}</div>
+            <div class="track"><div class="fill" style="width:${p}%; background:${color}"></div></div>
+            <div class="pct">${p}%</div>
+          </div>`;
+      }).join("")
+    }</div>`;
   }
 
-  // ---------- Data helpers ----------
   async function ensureBanks(){
     for (const lvl of LEVELS.filter(l=>!bank[l])) {
       const r = await fetch(`${API_BASE}/prompts/${encodeURIComponent(lvl)}`);
@@ -151,8 +134,6 @@
 
   // ---------- Start flow ----------
   startBtn.onclick = async () => {
-    API_BASE = apiBaseInput.value.trim();
-    if (!API_BASE) return alert("Set API Base URL first.");
     startBtn.disabled=true; recBtn.disabled=true; stopBtn.disabled=true;
     resultDiv.innerHTML=""; questionBox.textContent="Loading questions…";
     try {
@@ -194,7 +175,7 @@
         debugPre.textContent = JSON.stringify(data, null, 2);
         if (!res.ok) throw new Error(data?.detail || "Upload failed");
 
-        // Collect per-turn scores (v1.0 dimensions)
+        // Collect per-turn CEFR dimension scores
         const s = data.scores || {};
         sessionScores.push({
           relevance: +s.relevance || 0,
@@ -204,7 +185,6 @@
           vocabulary: +s.vocabulary || 0
         });
 
-        // Feedback
         if (data.feedback) sessionFeedback.push(data.feedback);
 
         const normalized = normalizeLevelLabel(data.provisional_level);
